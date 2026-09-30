@@ -160,6 +160,16 @@ def clip_to_row(clip: ClipRecord) -> dict:
     }
 
 
+def resolve_video_path(example: dict, dcsass_root: Path) -> dict:
+    """Rewrite a parquet-relative video path to an absolute one for this machine."""
+    abs_path = str((dcsass_root / example["video_path"]).resolve())
+    example["video_path"] = abs_path
+    for item in example["messages"][0]["content"]:
+        if item.get("type") == "video":
+            item["path"] = abs_path
+    return example
+
+
 def build_parquets(settings: Settings) -> tuple[Path, Path]:
     """Scan the raw dataset, write train/val parquet, return their paths."""
     settings.dataset_dir.mkdir(parents=True, exist_ok=True)

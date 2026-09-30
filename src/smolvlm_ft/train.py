@@ -25,7 +25,7 @@ from transformers import TrainerCallback
 
 from .collator import VideoCollatorConfig, VideoSFTCollator
 from .config import Settings
-from .data import build_parquets
+from .data import build_parquets, resolve_video_path
 from .lora import build_lora_model, load_processor, resolve_device
 
 logger = logging.getLogger(__name__)
@@ -148,16 +148,6 @@ def _configure_mlflow_tracking(settings: Settings) -> None:
         )
 
 
-def _resolve_video_path(example: dict, dcsass_root: Path) -> dict:
-    """Rewrite the parquet-relative video path to an absolute one for this machine."""
-    abs_path = str((dcsass_root / example["video_path"]).resolve())
-    example["video_path"] = abs_path
-    for item in example["messages"][0]["content"]:
-        if item.get("type") == "video":
-            item["path"] = abs_path
-    return example
-
-
 def run_training(settings: Settings) -> int:
     """Execute the full fine-tuning job. Returns a process exit code."""
     settings.check_data_files()
@@ -178,7 +168,7 @@ def run_training(settings: Settings) -> int:
         "train": str(settings.train_parquet),
         "validation": str(settings.val_parquet),
     })
-    data = data.map(lambda ex: _resolve_video_path(ex, settings.dcsass_root))
+    data = data.map(lambda ex: resolve_video_path(ex, settings.dcsass_root))
     logger.info("Loaded train=%d val=%d rows", len(data["train"]), len(data["validation"]))
 
     # ----------------------------------------------------------------- model
@@ -280,6 +270,16 @@ def run_training(settings: Settings) -> int:
             merged.save_pretrained(str(settings.merged_output_dir), safe_serialization=True)
             processor.save_pretrained(str(settings.merged_output_dir))
 
+            # "Models from code": MLflow loads mlflow_model.py itself instead of
+            # cloudpickling a live Python object, which is the safer, supported
+            # pattern for custom pyfunc models.
+            mlflow.pyfunc.log_model(
+                name="model",
+                python_model=str(Path(__file__).parent / "mlflow_model.py"),
+                artifacts={"model_path": str(settings.merged_output_dir)},
+                pip_requirements=["transformers", "torch", "decord==0.6.0", "pillow", "numpy"],
+            )
+
         # --------------------------------------------------------- mlflow tail
         elapsed = time.time() - started
         train_metrics = train_out.metrics or {}
@@ -299,13 +299,15 @@ def run_training(settings: Settings) -> int:
 
 
 def main_cli(argv: list[str] | None = None) -> int:
-    """CLI dispatcher: ``build-data`` or ``train``."""
+    """CLI dispatcher: ``build-data``, ``train``, or ``evaluate``."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="smolvlm-ft", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("build-data", help="Scan raw DCSASS and write train/val parquet")
     sub.add_parser("train", help="Fine-tune the model and log to MLflow")
+    eval_parser = sub.add_parser("evaluate", help="Compare base vs fine-tuned model on the val split")
+    eval_parser.add_argument("--max-samples", type=int, default=None, help="Cap the number of val rows evaluated")
     args = parser.parse_args(argv)
 
     _setup_logging()
@@ -316,6 +318,10 @@ def main_cli(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "train":
         return run_training(settings)
+    if args.command == "evaluate":
+        from .evaluate import run_evaluation
+
+        return run_evaluation(settings, max_samples=args.max_samples)
     return 2
 
 
