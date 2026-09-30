@@ -80,8 +80,11 @@ class Settings(BaseSettings):
     num_frames: int = Field(default=4, ge=1, description="Frames sampled per clip (clips are 1-5s)")
     max_image_size: int = Field(default=512, ge=56, description="Frame side (px). Must be the model native 512 for this architecture; the merger requires exactly 64 tokens/frame")
     logging_steps: int = Field(default=5, ge=1, description="Log a metric line every N steps")
-    save_steps: int = Field(default=50, ge=1, description="Save a checkpoint every N steps")
     eval_steps: int = Field(default=50, ge=1, description="Run validation every N steps")
+    first_checkpoint_step: int = Field(
+        default=100, ge=1,
+        description="Step of the first unconditional checkpoint; every save after that requires a new best eval loss",
+    )
     num_train_epochs: int = Field(default=1, ge=1, description="Fallback epochs field (max_steps wins)")
     bf16: bool = Field(default=True, description="Use bfloat16 (needs CUDA; CPU test runs use fp32)")
     fp16: bool = Field(default=False, description="Use float16")

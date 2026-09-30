@@ -54,6 +54,31 @@ class CheckpointArtifactCallback(TrainerCallback):
         return control
 
 
+class BestEvalCheckpointCallback(TrainerCallback):
+    """Save the first checkpoint at ``first_checkpoint_step``, then only on new best eval loss.
+
+    Replaces the default periodic ``save_steps`` cadence: with it, checkpoints
+    after the first one would land on arbitrary step multiples even when the
+    model got worse. Requires ``save_strategy="no"`` so saves only ever happen
+    through ``control.should_save`` set here.
+    """
+
+    def __init__(self, first_checkpoint_step: int) -> None:
+        self.first_checkpoint_step = first_checkpoint_step
+        self.best_eval_loss: float | None = None
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics is None or state.global_step < self.first_checkpoint_step:
+            return control
+        eval_loss = metrics.get("eval_loss")
+        if eval_loss is None:
+            return control
+        if self.best_eval_loss is None or eval_loss < self.best_eval_loss:
+            self.best_eval_loss = eval_loss
+            control.should_save = True
+        return control
+
+
 
 def _collect_params(settings: Settings, device: torch.device, train_rows: int, val_rows: int) -> dict[str, object]:
     """Hyper-parameters worth tracking that the HF Trainer does NOT log itself.
@@ -180,7 +205,8 @@ def run_training(settings: Settings) -> int:
         weight_decay=settings.weight_decay,
         max_grad_norm=settings.max_grad_norm,
         logging_steps=settings.logging_steps,
-        save_steps=settings.save_steps,
+        # Saving is driven entirely by BestEvalCheckpointCallback, not a fixed step cadence.
+        save_strategy="no",
         save_total_limit=settings.save_total_limit,
         eval_strategy="steps",
         eval_steps=settings.eval_steps,
@@ -216,7 +242,10 @@ def run_training(settings: Settings) -> int:
         eval_dataset=data["validation"],
         processing_class=processor,
         data_collator=collator,
-        callbacks=[CheckpointArtifactCallback()],
+        callbacks=[
+            BestEvalCheckpointCallback(settings.first_checkpoint_step),
+            CheckpointArtifactCallback(),
+        ],
     )
 
     # ----------------------------------------------------------------- mlflow
