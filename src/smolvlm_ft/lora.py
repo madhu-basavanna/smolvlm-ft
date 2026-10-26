@@ -35,16 +35,18 @@ def resolve_device(settings: Settings) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def load_processor(settings: Settings):
+def load_processor(settings: Settings, num_frames: int | None = None):
     """Load the processor and pin the frame-sampling knobs used at train time.
 
     The collator decodes and resizes frames itself (decord) to a fixed square
     ``max_image_size``; these settings are belt-and-braces for the processor's
-    own decoding path.
+    own decoding path. ``num_frames`` overrides ``settings.num_frames`` for the
+    clip task, which needs more frames per sample than the per-clip task.
     """
+    frames = num_frames or settings.num_frames
     processor = AutoProcessor.from_pretrained(settings.model_name)
     if hasattr(processor, "video_processor"):
-        processor.video_processor.num_frames = settings.num_frames
+        processor.video_processor.num_frames = frames
         processor.video_processor.fps = 2
         processor.video_processor.max_image_size = {"longest_edge": settings.max_image_size}
     return processor
